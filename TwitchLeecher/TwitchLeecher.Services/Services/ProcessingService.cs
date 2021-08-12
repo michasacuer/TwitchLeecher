@@ -11,7 +11,7 @@ using TwitchLeecher.Shared.IO;
 
 namespace TwitchLeecher.Services.Services
 {
-    internal class ProcessingService : IProcessingService
+    public class ProcessingService : IProcessingService
     {
         #region Constants
 

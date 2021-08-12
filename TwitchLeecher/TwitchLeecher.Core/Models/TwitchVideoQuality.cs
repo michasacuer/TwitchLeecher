@@ -72,7 +72,7 @@ namespace TwitchLeecher.Core.Models
                 }
                 else
                 {
-                    DisplayString = UNKNOWN;
+                    DisplayString = QUALITY_HIGH;
                 }
             }
 

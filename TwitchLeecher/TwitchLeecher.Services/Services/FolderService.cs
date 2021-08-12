@@ -5,7 +5,7 @@ using TwitchLeecher.Shared.Reflection;
 
 namespace TwitchLeecher.Services.Services
 {
-    internal class FolderService : IFolderService
+    public class FolderService : IFolderService
     {
         #region Fields
 

@@ -14,7 +14,7 @@ using TwitchLeecher.Shared.Reflection;
 
 namespace TwitchLeecher.Services.Services
 {
-    internal class PreferencesService : IPreferencesService
+    public class PreferencesService : IPreferencesService
     {
         #region Constants
 
@@ -64,10 +64,9 @@ namespace TwitchLeecher.Services.Services
 
         #region Constructors
 
-        public PreferencesService(IFolderService folderService, IEventAggregator eventAggregator)
+        public PreferencesService(IFolderService folderService)
         {
             _folderService = folderService;
-            _eventAggregator = eventAggregator;
 
             _tlVersion = AssemblyUtil.Get.GetAssemblyVersion().Trim();
             _commandLockObject = new object();

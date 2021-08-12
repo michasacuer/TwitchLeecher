@@ -24,7 +24,7 @@ using TwitchLeecher.Shared.Reflection;
 
 namespace TwitchLeecher.Services.Services
 {
-    internal class TwitchService : BindableBase, ITwitchService, IDisposable
+    public class TwitchService : ITwitchService, IDisposable
     {
         #region Constants
 
@@ -59,12 +59,8 @@ namespace TwitchLeecher.Services.Services
 
         private readonly IPreferencesService _preferencesService;
         private readonly IProcessingService _processingService;
-        private readonly IEventAggregator _eventAggregator;
 
         private readonly Timer _downloadTimer;
-
-        private ObservableCollection<TwitchVideo> _videos;
-        private ObservableCollection<TwitchVideoDownload> _downloads;
 
         private ConcurrentDictionary<string, DownloadTask> _downloadTasks;
         private Dictionary<string, Uri> _gameThumbnails;
@@ -79,79 +75,23 @@ namespace TwitchLeecher.Services.Services
 
         public TwitchService(
             IPreferencesService preferencesService,
-            IProcessingService processingService,
-            IEventAggregator eventAggregator)
+            IProcessingService processingService)
         {
             _preferencesService = preferencesService;
             _processingService = processingService;
-            _eventAggregator = eventAggregator;
-
-            _videos = new ObservableCollection<TwitchVideo>();
-            _videos.CollectionChanged += Videos_CollectionChanged;
-
-            _downloads = new ObservableCollection<TwitchVideoDownload>();
-            _downloads.CollectionChanged += Downloads_CollectionChanged;
 
             _downloadTasks = new ConcurrentDictionary<string, DownloadTask>();
 
             _changeDownloadLockObject = new object();
-
-            _downloadTimer = new Timer(DownloadTimerCallback, null, 0, TIMER_INTERVALL);
-
-            _eventAggregator.GetEvent<RemoveDownloadEvent>().Subscribe(Remove, ThreadOption.UIThread);
         }
 
         #endregion Constructors
 
         #region Properties
 
-        public ObservableCollection<TwitchVideo> Videos
-        {
-            get
-            {
-                return _videos;
-            }
-            private set
-            {
-                if (_videos != null)
-                {
-                    _videos.CollectionChanged -= Videos_CollectionChanged;
-                }
+        public List<TwitchVideo> Videos { get; set; } = new List<TwitchVideo>();
 
-                SetProperty(ref _videos, value, nameof(Videos));
-
-                if (_videos != null)
-                {
-                    _videos.CollectionChanged += Videos_CollectionChanged;
-                }
-
-                FireVideosCountChanged();
-            }
-        }
-
-        public ObservableCollection<TwitchVideoDownload> Downloads
-        {
-            get
-            {
-                return _downloads;
-            }
-            private set
-            {
-                if (_downloads != null)
-                {
-                    _downloads.CollectionChanged -= Downloads_CollectionChanged;
-                }
-
-                SetProperty(ref _downloads, value, nameof(Downloads));
-
-                if (_downloads != null)
-                {
-                    _downloads.CollectionChanged += Downloads_CollectionChanged;
-                }
-
-                FireDownloadsCountChanged();
-            }
-        }
+        public List<TwitchVideoDownload> Downloads { get; set; } = new List<TwitchVideoDownload>();
 
         #endregion Properties
 
@@ -341,27 +281,10 @@ namespace TwitchLeecher.Services.Services
             }
         }
 
-        public void Search(SearchParameters searchParams)
+        public void Search(string urls)
         {
-            if (searchParams == null)
-            {
-                throw new ArgumentNullException(nameof(searchParams));
-            }
 
-            switch (searchParams.SearchType)
-            {
-                case SearchType.Channel:
-                    SearchChannel(searchParams.Channel, searchParams.VideoType, searchParams.LoadLimitType, searchParams.LoadFrom.Value, searchParams.LoadTo.Value, searchParams.LoadLastVods);
-                    break;
-
-                case SearchType.Urls:
-                    SearchUrls(searchParams.Urls);
-                    break;
-
-                case SearchType.Ids:
-                    SearchIds(searchParams.Ids);
-                    break;
-            }
+            SearchUrls(urls);
         }
 
         private void SearchChannel(string channel, VideoType videoType, LoadLimitType loadLimit, DateTime loadFrom, DateTime loadTo, int loadLastVods)
@@ -373,7 +296,7 @@ namespace TwitchLeecher.Services.Services
 
             string channelId = GetChannelIdByName(channel);
 
-            ObservableCollection<TwitchVideo> videos = new ObservableCollection<TwitchVideo>();
+            List<TwitchVideo> videos = new List<TwitchVideo>();
 
             string broadcastTypeParam;
 
@@ -474,14 +397,14 @@ namespace TwitchLeecher.Services.Services
             Videos = videos;
         }
 
-        private void SearchUrls(string urls)
+        public void  SearchUrls(string urls)
         {
             if (string.IsNullOrWhiteSpace(urls))
             {
                 throw new ArgumentNullException(nameof(urls));
             }
 
-            ObservableCollection<TwitchVideo> videos = new ObservableCollection<TwitchVideo>();
+            List<TwitchVideo> videos = new List<TwitchVideo>();
 
             string[] urlArr = urls.Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
 
@@ -516,7 +439,7 @@ namespace TwitchLeecher.Services.Services
                 throw new ArgumentNullException(nameof(ids));
             }
 
-            ObservableCollection<TwitchVideo> videos = new ObservableCollection<TwitchVideo>();
+            List<TwitchVideo> videos = new List<TwitchVideo>();
 
             string[] idsArr = ids.Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
 
@@ -627,159 +550,143 @@ namespace TwitchLeecher.Services.Services
 
             lock (_changeDownloadLockObject)
             {
-                _downloads.Add(new TwitchVideoDownload(downloadParams));
+                Downloads.Add(new TwitchVideoDownload(downloadParams));
             }
         }
 
-        private void DownloadTimerCallback(object state)
+        public void Download()
         {
-            if (_paused)
+            if (!Downloads.Where(d => d.DownloadState == DownloadState.Downloading).Any())
             {
-                return;
-            }
+                TwitchVideoDownload download = Downloads.Where(d => d.DownloadState == DownloadState.Queued).FirstOrDefault();
 
-            StartQueuedDownloadIfExists();
-        }
-
-        private void StartQueuedDownloadIfExists()
-        {
-            if (_paused)
-            {
-                return;
-            }
-
-            if (Monitor.TryEnter(_changeDownloadLockObject))
-            {
-                try
+                if (download == null)
                 {
-                    if (!_downloads.Where(d => d.DownloadState == DownloadState.Downloading).Any())
+                    return;
+                }
+
+                DownloadParameters downloadParams = download.DownloadParams;
+
+                CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+                CancellationToken cancellationToken = cancellationTokenSource.Token;
+
+                string downloadId = download.Id;
+                string vodId = downloadParams.Video.Id;
+                string tempDir = Path.Combine(_preferencesService.CurrentPreferences.DownloadTempFolder, TEMP_PREFIX + downloadId);
+                string ffmpegFile = _processingService.FFMPEGExe;
+                string concatFile = Path.Combine(tempDir, Path.GetFileNameWithoutExtension(downloadParams.FullPath) + ".ts");
+                string outputFile = downloadParams.FullPath;
+
+                bool disableConversion = downloadParams.DisableConversion;
+                bool cropStart = downloadParams.CropStart;
+                bool cropEnd = downloadParams.CropEnd;
+
+                TimeSpan cropStartTime = downloadParams.CropStartTime;
+                TimeSpan cropEndTime = downloadParams.CropEndTime;
+
+                TwitchVideoQuality quality = downloadParams.Quality;
+
+                VodAuthInfo vodAuthInfo = downloadParams.VodAuthInfo;
+
+                Action<DownloadState> setDownloadState = download.SetDownloadState;
+                Action<string> log = download.AppendLog;
+                Action<string> setStatus = download.SetStatus;
+                Action<double> setProgress = download.SetProgress;
+                Action<bool> setIsIndeterminate = download.SetIsIndeterminate;
+
+                Task downloadVideoTask = new Task(() =>
+                {
+                    setStatus("Initializing");
+
+                    log("Download task has been started!");
+
+                    WriteDownloadInfo(log, downloadParams, ffmpegFile, tempDir);
+
+                    CheckTempDirectory(log, tempDir);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    string playlistUrl = RetrievePlaylistUrlForQuality(log, quality, vodId, vodAuthInfo);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    VodPlaylist vodPlaylist = RetrieveVodPlaylist(log, tempDir, playlistUrl);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    CropInfo cropInfo = CropVodPlaylist(vodPlaylist, cropStart, cropEnd, cropStartTime, cropEndTime);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    DownloadParts(log, setStatus, setProgress, vodPlaylist, cancellationToken);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    _processingService.ConcatParts(log, setStatus, setProgress, vodPlaylist, disableConversion
+                        ? outputFile
+                        : concatFile);
+
+                    if (!disableConversion)
                     {
-                        TwitchVideoDownload download = _downloads.Where(d => d.DownloadState == DownloadState.Queued).FirstOrDefault();
+                        cancellationToken.ThrowIfCancellationRequested();
+                        _processingService.ConvertVideo(log, setStatus, setProgress, setIsIndeterminate, concatFile, outputFile, cropInfo);
+                    }
+                }, cancellationToken);
 
-                        if (download == null)
+                Task continueTask = downloadVideoTask.ContinueWith(task =>
+                {
+                    log(Environment.NewLine + Environment.NewLine + "Starting temporary download folder cleanup!");
+                    CleanUp(tempDir, log);
+
+                    setProgress(100);
+                    setIsIndeterminate(false);
+
+                    bool success = false;
+
+                    if (task.IsFaulted)
+                    {
+                        setDownloadState(DownloadState.Error);
+                        log(Environment.NewLine + Environment.NewLine + "Download task ended with an error!");
+
+                        if (task.Exception != null)
                         {
-                            return;
-                        }
-
-                        DownloadParameters downloadParams = download.DownloadParams;
-
-                        CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
-                        CancellationToken cancellationToken = cancellationTokenSource.Token;
-
-                        string downloadId = download.Id;
-                        string vodId = downloadParams.Video.Id;
-                        string tempDir = Path.Combine(_preferencesService.CurrentPreferences.DownloadTempFolder, TEMP_PREFIX + downloadId);
-                        string ffmpegFile = _processingService.FFMPEGExe;
-                        string concatFile = Path.Combine(tempDir, Path.GetFileNameWithoutExtension(downloadParams.FullPath) + ".ts");
-                        string outputFile = downloadParams.FullPath;
-
-                        bool disableConversion = downloadParams.DisableConversion;
-                        bool cropStart = downloadParams.CropStart;
-                        bool cropEnd = downloadParams.CropEnd;
-
-                        TimeSpan cropStartTime = downloadParams.CropStartTime;
-                        TimeSpan cropEndTime = downloadParams.CropEndTime;
-
-                        TwitchVideoQuality quality = downloadParams.Quality;
-
-                        VodAuthInfo vodAuthInfo = downloadParams.VodAuthInfo;
-
-                        Action<DownloadState> setDownloadState = download.SetDownloadState;
-                        Action<string> log = download.AppendLog;
-                        Action<string> setStatus = download.SetStatus;
-                        Action<double> setProgress = download.SetProgress;
-                        Action<bool> setIsIndeterminate = download.SetIsIndeterminate;
-
-                        Task downloadVideoTask = new Task(() =>
-                        {
-                            setStatus("Initializing");
-
-                            log("Download task has been started!");
-
-                            WriteDownloadInfo(log, downloadParams, ffmpegFile, tempDir);
-
-                            CheckTempDirectory(log, tempDir);
-
-                            cancellationToken.ThrowIfCancellationRequested();
-
-                            string playlistUrl = RetrievePlaylistUrlForQuality(log, quality, vodId, vodAuthInfo);
-
-                            cancellationToken.ThrowIfCancellationRequested();
-
-                            VodPlaylist vodPlaylist = RetrieveVodPlaylist(log, tempDir, playlistUrl);
-
-                            cancellationToken.ThrowIfCancellationRequested();
-
-                            CropInfo cropInfo = CropVodPlaylist(vodPlaylist, cropStart, cropEnd, cropStartTime, cropEndTime);
-
-                            cancellationToken.ThrowIfCancellationRequested();
-
-                            DownloadParts(log, setStatus, setProgress, vodPlaylist, cancellationToken);
-
-                            cancellationToken.ThrowIfCancellationRequested();
-
-                            _processingService.ConcatParts(log, setStatus, setProgress, vodPlaylist, disableConversion ? outputFile : concatFile);
-
-                            if (!disableConversion)
-                            {
-                                cancellationToken.ThrowIfCancellationRequested();
-                                _processingService.ConvertVideo(log, setStatus, setProgress, setIsIndeterminate, concatFile, outputFile, cropInfo);
-                            }
-                        }, cancellationToken);
-
-                        Task continueTask = downloadVideoTask.ContinueWith(task =>
-                        {
-                            log(Environment.NewLine + Environment.NewLine + "Starting temporary download folder cleanup!");
-                            CleanUp(tempDir, log);
-
-                            setProgress(100);
-                            setIsIndeterminate(false);
-
-                            bool success = false;
-
-                            if (task.IsFaulted)
-                            {
-                                setDownloadState(DownloadState.Error);
-                                log(Environment.NewLine + Environment.NewLine + "Download task ended with an error!");
-
-                                if (task.Exception != null)
-                                {
-                                    log(Environment.NewLine + Environment.NewLine + task.Exception.ToString());
-                                }
-                            }
-                            else if (task.IsCanceled)
-                            {
-                                setDownloadState(DownloadState.Canceled);
-                                log(Environment.NewLine + Environment.NewLine + "Download task was canceled!");
-                            }
-                            else
-                            {
-                                success = true;
-                                setDownloadState(DownloadState.Done);
-                                log(Environment.NewLine + Environment.NewLine + "Download task ended successfully!");
-                            }
-
-                            if (!_downloadTasks.TryRemove(downloadId, out DownloadTask downloadTask))
-                            {
-                                throw new ApplicationException("Could not remove download task with ID '" + downloadId + "' from download task collection!");
-                            }
-
-                            if (success && _preferencesService.CurrentPreferences.DownloadRemoveCompleted)
-                            {
-                                _eventAggregator.GetEvent<RemoveDownloadEvent>().Publish(downloadId);
-                            }
-                        });
-
-                        if (_downloadTasks.TryAdd(downloadId, new DownloadTask(downloadVideoTask, continueTask, cancellationTokenSource)))
-                        {
-                            downloadVideoTask.Start();
-                            setDownloadState(DownloadState.Downloading);
+                            log(Environment.NewLine + Environment.NewLine + task.Exception.ToString());
                         }
                     }
-                }
-                finally
+                    else if (task.IsCanceled)
+                    {
+                        setDownloadState(DownloadState.Canceled);
+                        log(Environment.NewLine + Environment.NewLine + "Download task was canceled!");
+                    }
+                    else
+                    {
+                        success = true;
+                        setDownloadState(DownloadState.Done);
+                        log(Environment.NewLine + Environment.NewLine + "Download task ended successfully!");
+                    }
+
+                    if (!_downloadTasks.TryRemove(downloadId, out DownloadTask downloadTask))
+                    {
+                        throw new ApplicationException("Could not remove download task with ID '" + downloadId + "' from download task collection!");
+                    }
+
+                    if (success && _preferencesService.CurrentPreferences.DownloadRemoveCompleted)
+                    {
+                    }
+                });
+
+                if (_downloadTasks.TryAdd(downloadId, new DownloadTask(downloadVideoTask, continueTask, cancellationTokenSource)))
                 {
-                    Monitor.Exit(_changeDownloadLockObject);
+                    downloadVideoTask.Start();
+                    setDownloadState(DownloadState.Downloading);
+
+                    while (true)
+                    {
+                        if (downloadVideoTask.IsCompleted)
+                        {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -839,6 +746,7 @@ namespace TwitchLeecher.Services.Services
 
                 log(Environment.NewLine + Environment.NewLine + "Retrieving m3u8 playlist urls for all VOD qualities...");
                 string allPlaylistsStr = webClient.DownloadString(string.Format(ALL_PLAYLISTS_URL, vodId, vodAuthInfo.Signature, vodAuthInfo.Token));
+                Console.WriteLine($"all players: {allPlaylistsStr}");
                 log(" done!");
 
                 List<string> allPlaylistsList = allPlaylistsStr.Split(new string[] { "\n" }, StringSplitOptions.RemoveEmptyEntries).Where(s => !s.StartsWith("#")).ToList();
@@ -1054,7 +962,7 @@ namespace TwitchLeecher.Services.Services
             {
                 if (!_downloadTasks.TryGetValue(id, out DownloadTask downloadTask))
                 {
-                    TwitchVideoDownload download = _downloads.Where(d => d.Id == id).FirstOrDefault();
+                    TwitchVideoDownload download = Downloads.Where(d => d.Id == id).FirstOrDefault();
 
                     if (download != null && (download.DownloadState == DownloadState.Canceled || download.DownloadState == DownloadState.Error))
                     {
@@ -1073,11 +981,11 @@ namespace TwitchLeecher.Services.Services
             {
                 if (!_downloadTasks.TryGetValue(id, out DownloadTask downloadTask))
                 {
-                    TwitchVideoDownload download = _downloads.Where(d => d.Id == id).FirstOrDefault();
+                    TwitchVideoDownload download = Downloads.Where(d => d.Id == id).FirstOrDefault();
 
                     if (download != null)
                     {
-                        _downloads.Remove(download);
+                        Downloads.Remove(download);
                     }
                 }
             }
@@ -1251,7 +1159,7 @@ namespace TwitchLeecher.Services.Services
 
             try
             {
-                return !_downloads.Where(d => d.DownloadState == DownloadState.Downloading || d.DownloadState == DownloadState.Queued).Any();
+                return !Downloads.Where(d => d.DownloadState == DownloadState.Downloading || d.DownloadState == DownloadState.Queued).Any();
             }
             finally
             {
@@ -1280,7 +1188,7 @@ namespace TwitchLeecher.Services.Services
                 // Don't care about aborted tasks
             }
 
-            List<string> toRemove = _downloads.Select(d => d.Id).ToList();
+            List<string> toRemove = Downloads.Select(d => d.Id).ToList();
 
             foreach (string id in toRemove)
             {
@@ -1290,7 +1198,7 @@ namespace TwitchLeecher.Services.Services
 
         public bool IsFileNameUsed(string fullPath)
         {
-            IEnumerable<TwitchVideoDownload> downloads = _downloads.Where(d => d.DownloadState == DownloadState.Downloading || d.DownloadState == DownloadState.Queued);
+            IEnumerable<TwitchVideoDownload> downloads = Downloads.Where(d => d.DownloadState == DownloadState.Downloading || d.DownloadState == DownloadState.Queued);
 
             foreach (TwitchVideoDownload download in downloads)
             {
@@ -1305,12 +1213,10 @@ namespace TwitchLeecher.Services.Services
 
         private void FireVideosCountChanged()
         {
-            _eventAggregator.GetEvent<VideosCountChangedEvent>().Publish(_videos != null ? _videos.Count : 0);
         }
 
         private void FireDownloadsCountChanged()
         {
-            _eventAggregator.GetEvent<DownloadsCountChangedEvent>().Publish(_downloads != null ? _downloads.Count : 0);
         }
 
         protected virtual void Dispose(bool disposing)
@@ -1322,8 +1228,8 @@ namespace TwitchLeecher.Services.Services
                     _downloadTimer.Dispose();
                 }
 
-                _videos = null;
-                _downloads = null;
+                Videos = null;
+                Downloads = null;
                 _downloadTasks = null;
 
                 disposedValue = true;

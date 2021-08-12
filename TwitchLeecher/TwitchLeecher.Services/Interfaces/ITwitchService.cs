@@ -1,16 +1,18 @@
-﻿using System.Collections.ObjectModel;
+﻿using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Threading.Tasks;
 using TwitchLeecher.Core.Models;
 
 namespace TwitchLeecher.Services.Interfaces
 {
-    public interface ITwitchService : INotifyPropertyChanged
+    public interface ITwitchService
     {
         #region Properties
 
-        ObservableCollection<TwitchVideo> Videos { get; }
+        List<TwitchVideo> Videos { get; set; }
 
-        ObservableCollection<TwitchVideoDownload> Downloads { get; }
+        List<TwitchVideoDownload> Downloads { get; set; }
 
         #endregion Properties
 
@@ -22,7 +24,7 @@ namespace TwitchLeecher.Services.Interfaces
 
         string GetChannelIdByName(string channel);
 
-        void Search(SearchParameters searchParams);
+        void Search(string urls);
 
         void Enqueue(DownloadParameters downloadParams);
 
@@ -41,6 +43,10 @@ namespace TwitchLeecher.Services.Interfaces
         void Shutdown();
 
         bool IsFileNameUsed(string fullPath);
+
+        void Download();
+
+        void SearchUrls(string urls);
 
         #endregion Methods
     }
